@@ -19,7 +19,7 @@ TRAIN = 1
 USE_WANDB = False
 
 # ./trained_models/EVALUATION_NAME_{EVALUATION_REWARD};      will be used only if TRAIN = 0
-EVALUATION_REWARD = 2928465 #-113009#131311#24559
+EVALUATION_REWARD = 76#1653569#2928465 #-113009#131311#24559
 
 # "best" or "checkpoint";      will be used only if TRAIN = 0
 EVALUATION_NAME = "checkpoint"
@@ -137,7 +137,7 @@ def train():
     else:
         load_model(agent=agent, reward=EVALUATION_REWARD, name=EVALUATION_NAME)
         
-    load_model(agent=agent, reward=EVALUATION_REWARD, name=EVALUATION_NAME)
+    #load_model(agent=agent, reward=EVALUATION_REWARD, name=EVALUATION_NAME)
 
     best_reward = 0.0
     average_reward = 0.0
