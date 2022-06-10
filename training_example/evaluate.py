@@ -23,7 +23,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # user's own best model could be loaded from saved_models folder
 # TODO: right now default model is loaded, however users should evaluate their own models
-LOAD_CUSTOM_MODEL = "default_model/best_253953.dat"
+#LOAD_CUSTOM_MODEL = "saved_models/best_35237.dat" #"default_model/best_253953.dat"
+
+LOAD_CUSTOM_MODEL = "trained_models/best_34576.dat"
 
 # default model is trained with given sac agent code and training is breaked at 320K steps
 LOAD_DEFAULT_MODEL = "default_model/best_253953.dat"
@@ -104,8 +106,10 @@ def evaluate(port=8080):
         (obs.angle, obs.track, obs.trackPos, obs.speedX, obs.speedY, obs.opponents)
     )
 
+    #Ego dışındaki agents için observations return ediliyor.
     agent_observations = env.get_agent_observations()
     if CONTROL_OTHER_AGENTS:
+        #tüm agents'ın controller type'ını API olarak değiştiriyor yani sanırım agent kontrol edecek demiş oluyoruz.
         env.change_opponent_control_to_api()
 
     agent_actions = []
@@ -117,7 +121,8 @@ def evaluate(port=8080):
 
         if CONTROL_OTHER_AGENTS:
             # set other agent actions
-            env.set_agent_actions(agent_actions)
+            #agent_actions bir liste tipinde ve her vehicle kendi index'inde action'ı execut ediyor.
+            env.set_agent_actions(agent_actions) 
 
         obs, reward, done, summary = env.step(action)
         progress = env.get_progress_on_road()
@@ -145,6 +150,7 @@ def evaluate(port=8080):
                         agent_obs.trackPos,
                     )
                 )
+                #opponents actions seçilip listeye ekleniyor.
                 agent_action = np.array(opponent_agent.select_action(state=agent_state))
                 agent_actions.append(agent_action)
 

@@ -92,7 +92,7 @@ class SimstarEnv(gym.Env):
             simstar.TransportError: Raised when connection could not be set up with SimStar
         """
 
-        self.c_w = 0.02  # out of track penalty weight
+        self.c_w = 0.2 #0.02  # out of track penalty weight
 
         self.add_opponents = add_opponents  # True: adds opponent vehicles; False: removes opponent vehicles
         self.number_of_opponents = num_opponents  # agent_locations, agent_speeds, and lane_ids sizes has to be the same
@@ -115,7 +115,7 @@ class SimstarEnv(gym.Env):
             1  # make sure that ego vehicle lane id is not greater than number of lanes
         )
         self.ego_start_offset = (
-            25  # ego vehicle's offset from the starting point of the road
+            25 #25  # ego vehicle's offset from the starting point of the road
         )
         self.default_speed = 160  # km/hr
         self.set_ego_speed = 60  # km/hr
@@ -228,7 +228,7 @@ class SimstarEnv(gym.Env):
             actor=self.road,
             distance=self.ego_start_offset,
             lane_id=self.ego_lane_id,
-            initial_speed=0,
+            initial_speed=0, #0,
             set_speed=self.set_ego_speed,
             vehicle_type=simstar.EVehicleType.F1Racing,
         )
@@ -345,11 +345,11 @@ class SimstarEnv(gym.Env):
 
         self.simstar_step()
 
-        simstar_obs = self.get_simstar_obs(self.main_vehicle)
-        observation = self.make_observation(simstar_obs)
+        simstar_obs = self.get_simstar_obs(self.main_vehicle) ###
+        observation = self.make_observation(simstar_obs)      ###
         return observation
 
-    def calculate_reward(self, simstar_obs):
+    def calculate_reward(self, simstar_obs, action):
         collision = simstar_obs["damage"]
         reward = 0.0
         done = False
@@ -359,23 +359,64 @@ class SimstarEnv(gym.Env):
         angle = simstar_obs["angle"]
         spd = np.sqrt(simstar_obs["speedX"] ** 2 + simstar_obs["speedY"] ** 2)
 
+        #progress = 5*spd * (np.cos(angle) - 2*np.abs(np.sin(angle)))
+        
         progress = spd * (np.cos(angle) - np.abs(np.sin(angle)))
-        reward = progress
+        
+        '''
+        print('speedX:', simstar_obs["speedX"])
+        print('speedX2:', spd * np.cos(angle))
+        print()
+        print('speedY:', simstar_obs["speedY"])
+        print('speedY2:', spd * np.abs(np.sin(angle)))
+        print()
+        print('angle:', angle)
+        print('trackPos:', trackPos)
+        print('------------------------------------')
+        '''
+        
+        
+        reward = (spd**2) * (np.cos(angle) - 2*np.abs(np.sin(angle)))
+        
+        #going_forward_bonus =  50*np.cos(angle) #it is like an offset x speed
+        #reward += going_forward_bonus
+        
+        maneuver_penalty = self.fast_maneuver_penalty(spd, action)
+        reward -= maneuver_penalty
+        
+        
+        accel_penalty = self.fast_accel_penalty(spd, angle, action, angle_threshold=0.1)
+        reward -= accel_penalty
+        
+        if trackPos > 0.4:
+            reward -= ((trackPos-0.4)*20)**3
+            #print('out of track penalty:', ((trackPos-0.4)*20)**3)
+        
+        #print('x reward:', spd * (np.cos(angle)))
+        #print('y penalty:', spd * (- 2*np.abs(np.sin(angle))))
+        #print('progress reward:', progress)
+        #print('maneuver_penalty:', maneuver_penalty)
+        #print('total reward:', reward)
+        #print('trackPos:', trackPos)
+        #print('------------------------------------')
+        
 
         if collision:
             print("[SimstarEnv] collision with opponent vehicle")
             reward -= self.c_w * spd * spd
+        
 
         if np.abs(trackPos) >= 0.9:
             print("[SimstarEnv] finish episode due to road deviation")
-            reward = -300
+            reward = -4000#-300
             summary["end_reason"] = "road_deviation"
             done = True
 
         if progress < self.termination_limit_progress:
+            reward = -1000
             if self.terminal_judge_start < self.time_step_slow:
                 print("[SimstarEnv] finish episode due to agent is too slow")
-                reward = -100
+                reward = -10000#-100
                 summary["end_reason"] = "too_slow"
                 done = True
         else:
@@ -386,11 +427,46 @@ class SimstarEnv(gym.Env):
         self.time_step_slow += 1
 
         return reward, done, summary
+    
+    def fast_maneuver_penalty(self, speed, action):
+        steer = abs(action[0]) #0-1
+        accel = abs(action[1]) #0-1
+        
+        if abs(speed)>30: 
+            penalty = abs(speed/10) * -np.log(max(1-steer,0.001)) * -np.log(max(1-accel,0.001))
+        else:
+            penalty = 0
+        
+        #print('speed:', speed)
+        #print('steer:', (-np.log(1-steer+0.001)))
+        #print('accel:', (-np.log(1-accel+0.001)))
+        #print('penalty:', penalty)
+        #print('shape:', penalty.shape)
+        #print('--------------------------------------')
+        
+        
+        return penalty
+        
+    def fast_accel_penalty(self, speed, angle, action, angle_threshold):
+        
+        if speed > 30:
+            accel = abs(action[1])
+            if abs(angle) > angle_threshold:
+                penalty = (-(np.log((max(1-accel,0.001))))**5)
+                return penalty
+            return -(((1-abs(angle))**10)*(speed/5)**2) #going forward reward
+        
+        else:
+            return 0
+
+            
+        
 
     def get_progress_on_road(self):
         return self.progress_on_road
 
     def step(self, action):
+        
         # send inputs if it is driven via API
         if self.driving_type == simstar.DriveType.API:
             self.action_to_simstar(action, self.main_vehicle)
@@ -402,7 +478,7 @@ class SimstarEnv(gym.Env):
 
         simstar_obs = self.get_simstar_obs(self.main_vehicle)
         observation = self.make_observation(simstar_obs)
-        reward, done, summary = self.calculate_reward(simstar_obs)
+        reward, done, summary = self.calculate_reward(simstar_obs, action)
 
         if self.save:
             # save without normalizing
@@ -489,7 +565,11 @@ class SimstarEnv(gym.Env):
         trackPos = float(road_deviation["lat_dev"]) / self.road_width
 
         # if collision occurs, True. else False
-        damage = bool(vehicle_ref.check_for_collision())
+        #damage = bool(vehicle_ref.check_for_collision())
+        
+        damage =  bool(self.detect_collision_with_opponent(opponent_sensor_info=opponents, threshold=1.5))
+  
+
 
         simstar_obs = {
             "angle": angle,
@@ -502,6 +582,20 @@ class SimstarEnv(gym.Env):
         }
 
         return simstar_obs
+    
+    
+    def detect_collision_with_opponent(self, opponent_sensor_info, threshold=2)->bool:
+        #Check if any of the sensors detect a collision:
+        for op_sens in opponent_sensor_info:
+            if op_sens < threshold:
+                return True
+        #No collision
+        return False
+    
+    def did_i_just_past_an_opponent()->bool:
+        pass
+        
+        
 
     def make_observation(self, simstar_obs):
         names = ["angle", "speedX", "speedY", "opponents", "track", "trackPos"]
@@ -520,6 +614,7 @@ class SimstarEnv(gym.Env):
         )
 
     def get_agent_observations(self, raw=False):
+        #EGO dışındaki agents'ın observation'ını list olarak return ediyor sanıyorum.
         states = []
         for vehicle in self.actor_list:
             if vehicle.get_ID() != self.main_vehicle.get_ID():
@@ -568,3 +663,6 @@ class SimstarEnv(gym.Env):
 
         if self.save:
             del self.saver
+            
+            
+    

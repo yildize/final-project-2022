@@ -11,6 +11,7 @@ from simstarEnv import SimstarEnv
 from sac_agent import Model
 
 
+MODEL = 'SAC' #PPO
 # training mode: 1      evaluation mode: 0
 TRAIN = 1
 
@@ -18,10 +19,10 @@ TRAIN = 1
 USE_WANDB = False
 
 # ./trained_models/EVALUATION_NAME_{EVALUATION_REWARD};      will be used only if TRAIN = 0
-EVALUATION_REWARD = 123
+EVALUATION_REWARD = 2928465 #-113009#131311#24559
 
 # "best" or "checkpoint";      will be used only if TRAIN = 0
-EVALUATION_NAME = "best"
+EVALUATION_NAME = "checkpoint"
 
 # "Racing"
 TRACK_NAME = simstar.Environments.Racing
@@ -31,13 +32,13 @@ PORT = 8080
 HOST = "127.0.0.1"
 
 # bot vehicles will be added; the configuration and speed of other vehicles could be changed from simstarEnv.py
-WITH_OPPONENT = True
+WITH_OPPONENT = False #True
 
 # when the process is required to be speeded up, the synchronized mode will have to be turned on
 SYNC_MODE = True
 
 # times speeding up the training process [1-6]
-SPEED_UP = 3
+SPEED_UP = 6
 
 
 # port number can be updated from console argument
@@ -97,28 +98,46 @@ def train():
     insize = 4 + env.track_sensor_size + env.opponent_sensor_size
     outsize = env.action_space.shape[0]
 
+
     # default hyper-parameters, has to be modified if required
     hyperparams = {
         "lrvalue": 0.0005,
         "lrpolicy": 0.0001,
         "gamma": 0.97,
-        "episodes": 15000,
+        "episodes": 50000,
         "buffersize": 250000,
         "tau": 0.001,
         "batchsize": 64,
         "alpha": 0.2,
-        "maxlength": 10000,
+        "maxlength": 30000,
         "hidden": 256,
     }
+    
+    if MODEL == 'PPO':
+        hyperparams = {
+        "lr": 0.0005,
+        "gamma": 0.97,
+        "episodes": 50000,
+        "buffersize": 250000,
+        "tau": 0.001,
+        "batchsize": 64,
+        "alpha": 0.2,
+        "maxlength": 30000,
+        "hidden": 256,
+        "rolloutlen":2048
+        }
+    
     HyperParams = namedtuple("HyperParams", hyperparams.keys())
     hyprm = HyperParams(**hyperparams)
 
     agent = Model(env, hyprm, insize, outsize)
-
+        
     if TRAIN:
         writer = SummaryWriter(comment="_model")
     else:
         load_model(agent=agent, reward=EVALUATION_REWARD, name=EVALUATION_NAME)
+        
+    load_model(agent=agent, reward=EVALUATION_REWARD, name=EVALUATION_NAME)
 
     best_reward = 0.0
     average_reward = 0.0
@@ -136,7 +155,12 @@ def train():
 
         for step in range(hyprm.maxlength):
 
-            action = np.array(agent.select_action(state=state))
+            if MODEL == 'PPO':
+                action,log_prob,value = agent.select_action(state=state)
+                action = np.array(action)
+            else:
+                action = np.array(agent.select_action(state=state))
+                
             obs, reward, done, summary = env.step(action)
 
             next_state = np.hstack(
@@ -157,9 +181,16 @@ def train():
             episode_reward += reward
 
             if TRAIN:
-                agent.memory.push(state, action, reward, next_state, done)
-                if len(agent.memory.memories) > hyprm.batchsize:
-                    agent.update(agent.memory.sample(hyprm.batchsize))
+                if MODEL == 'PPO':
+                    agent.memory.push(state, action, reward, next_state, log_prob, value, done)
+                    if len(agent.memory.memories) > hyprm.rolloutlen:
+                        _,_,next_value = agent.select_action(state=state)
+                        agent.memory.set_next_val(next_value)
+                        agent.update(agent.memory.sample(hyprm.batchsize))
+                else:
+                    agent.memory.push(state, action, reward, next_state, done)
+                    if len(agent.memory.memories) > hyprm.batchsize:
+                        agent.update(agent.memory.sample(hyprm.batchsize))
 
             if done:
                 break
