@@ -9,9 +9,18 @@ from tensorboardX import SummaryWriter
 from collections import namedtuple
 from simstarEnv import SimstarEnv
 from sac_agent import Model
+from ppo_agent import Model as ModelPPO
 
 
-MODEL = 'SAC' #PPO
+MODEL = ['SAC', 'PPO'][1] 
+TRANSFER = 0
+# bot vehicles will be added; the configuration and speed of other vehicles could be changed from simstarEnv.py
+WITH_OPPONENT = False
+# port number has to be the same with the SimStar.sh -nullrhi -api-port=PORT
+PORT = 8080 #8080
+HOST = "127.0.0.1"
+
+
 # training mode: 1      evaluation mode: 0
 TRAIN = 1
 
@@ -19,20 +28,13 @@ TRAIN = 1
 USE_WANDB = False
 
 # ./trained_models/EVALUATION_NAME_{EVALUATION_REWARD};      will be used only if TRAIN = 0
-EVALUATION_REWARD = 76#1653569#2928465 #-113009#131311#24559
+EVALUATION_REWARD = 24565#1653569#1653569#2928465 #-113009#131311#24559
 
 # "best" or "checkpoint";      will be used only if TRAIN = 0
-EVALUATION_NAME = "checkpoint"
+EVALUATION_NAME = "best"
 
 # "Racing"
 TRACK_NAME = simstar.Environments.Racing
-
-# port number has to be the same with the SimStar.sh -nullrhi -api-port=PORT
-PORT = 8080
-HOST = "127.0.0.1"
-
-# bot vehicles will be added; the configuration and speed of other vehicles could be changed from simstarEnv.py
-WITH_OPPONENT = False #True
 
 # when the process is required to be speeded up, the synchronized mode will have to be turned on
 SYNC_MODE = True
@@ -104,40 +106,43 @@ def train():
         "lrvalue": 0.0005,
         "lrpolicy": 0.0001,
         "gamma": 0.97,
-        "episodes": 50000,
+        "episodes": 5000,
         "buffersize": 250000,
         "tau": 0.001,
         "batchsize": 64,
         "alpha": 0.2,
-        "maxlength": 30000,
+        "maxlength": 10000,
         "hidden": 256,
     }
     
     if MODEL == 'PPO':
         hyperparams = {
-        "lr": 0.0005,
-        "gamma": 0.97,
-        "episodes": 50000,
-        "buffersize": 250000,
-        "tau": 0.001,
-        "batchsize": 64,
-        "alpha": 0.2,
-        "maxlength": 30000,
-        "hidden": 256,
-        "rolloutlen":2048
+        "lr": 0.001,
+        "gamma": 0.99,
+        "value_coeff": 0.5,
+        "entropy_coeff": 0.001,
+        "episodes": 10000,
+        "batchsize": 32,
+        "maxlength": 10000,
+        "rollout_len":256,
+        "n_epochs":4,
         }
     
     HyperParams = namedtuple("HyperParams", hyperparams.keys())
     hyprm = HyperParams(**hyperparams)
 
-    agent = Model(env, hyprm, insize, outsize)
+    if MODEL == 'PPO':
+        agent = ModelPPO(env, hyprm, insize, outsize)
+    else:
+        agent = Model(env, hyprm, insize, outsize)
         
     if TRAIN:
         writer = SummaryWriter(comment="_model")
     else:
         load_model(agent=agent, reward=EVALUATION_REWARD, name=EVALUATION_NAME)
         
-    #load_model(agent=agent, reward=EVALUATION_REWARD, name=EVALUATION_NAME)
+    if TRANSFER:
+        load_model(agent=agent, reward=EVALUATION_REWARD, name=EVALUATION_NAME)
 
     best_reward = 0.0
     average_reward = 0.0
@@ -156,7 +161,7 @@ def train():
         for step in range(hyprm.maxlength):
 
             if MODEL == 'PPO':
-                action,log_prob,value = agent.select_action(state=state)
+                action, log_prob, value = agent.select_action(state=state)
                 action = np.array(action)
             else:
                 action = np.array(agent.select_action(state=state))
@@ -183,10 +188,11 @@ def train():
             if TRAIN:
                 if MODEL == 'PPO':
                     agent.memory.push(state, action, reward, next_state, log_prob, value, done)
-                    if len(agent.memory.memories) > hyprm.rolloutlen:
+                    if len(agent.memory) >= hyprm.rollout_len:
                         _,_,next_value = agent.select_action(state=state)
-                        agent.memory.set_next_val(next_value)
-                        agent.update(agent.memory.sample(hyprm.batchsize))
+                        advantages, returns = agent.calculate_returns(agent.memory.memories, hyprm.rollout_len, next_value.detach())
+                        agent.update(agent.memory.sample(hyprm.n_epochs, hyprm.batchsize, advantages, returns))
+                        agent.memory.clean()
                 else:
                     agent.memory.push(state, action, reward, next_state, done)
                     if len(agent.memory.memories) > hyprm.batchsize:
@@ -304,17 +310,27 @@ def tensorboard_writer(
 
 
 def save_model(agent, reward, name):
-    path = "saved_models/" + name + "_" + str(int(reward)) + ".dat"
 
-    torch.save(
-        {
-            "actor_state_dict": agent.actor.state_dict(),
-            "critic_1_state_dict": agent.critic_1.state_dict(),
-            "critic_2_state_dict": agent.critic_2.state_dict(),
+    if MODEL == 'PPO':
+        path = "saved_models/" + name + "_" + str(int(reward)) + "_ppo.dat"
+        torch.save(
+            {
+            "state_dict": agent.network.state_dict(),
             "episode_reward": reward,
-        },
-        path,
-    )
+            },
+            path,
+        )
+    else:
+        path = "saved_models/" + name + "_" + str(int(reward)) + ".dat"
+        torch.save(
+            {
+                "actor_state_dict": agent.actor.state_dict(),
+                "critic_1_state_dict": agent.critic_1.state_dict(),
+                "critic_2_state_dict": agent.critic_2.state_dict(),
+                "episode_reward": reward,
+            },
+            path,
+        )
 
 
 def load_model(agent, reward, name):

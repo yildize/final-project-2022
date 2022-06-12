@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import itertools
 from network_ppo import DenseNet
@@ -11,151 +12,139 @@ class Model(torch.nn.Module):
         self.n_states = n_insize
         self.n_actions = n_outsize
         self.gamma = params.gamma
-        self.tau = params.tau
-        self.alpha = params.alpha
-        self.hidden_size = params.hidden
+        self.n_epochs = params.n_epochs
+        self.value_coeff = params.value_coeff
+        self.entropy_coeff = params.entropy_coeff
+        self.episodes = params.episodes
+        self.clip_range = 0.3
 
         #create network:
-        network = DenseNet(self.n_states, self.n_actions, self.hidden_size)
+        self.network = DenseNet(self.n_states, self.n_actions)
         
         #optimizer
-        optimizer = torch.optim.Adam(network.parameters(), lr=params.lr) #LR SHOULD BE ADDED TO THE PARAMS IN TRAIN MODULE!
-
+        self.optim = torch.optim.Adam(self.network.parameters(), lr=params.lr)
 
         # make a replay buffer memory ro store experiences
-        self.memory = Memory_PPO(params.buffersize)
+        self.memory = Memory_PPO(params.rollout_len)
 
-        # mse loss algoritm is applied
-        self.critic_criterion = torch.nn.MSELoss()
-
-        # define actor and critic network optimizers
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=params.lrpolicy)
-        self.critic_optimizer = torch.optim.Adam(self.q_params, lr=params.lrvalue)
         
-        
-    def select_action(self, state) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def select_action(self, state):
         
         state = Variable(torch.from_numpy(state).float().unsqueeze(0))
-        #First obtain actor and critic outputs: (network will return categorical dists directly instead of logits)
-        dists, values = self.network(state) #don't forget that states obtained from vecenv which can be taught as batch of environments
-        #[n_envs, n_acts]
-
+        dists, values = self.network(state) 
+    
         #Calculate actions and their corresponding log_probs:
         actions = dists.sample()#[n_envs,1]
-
-        torch.clamp(actions, min=-1, max=1)
+        actions = torch.clamp(actions, min=-1, max=1) #clip
         log_probs = dists.log_prob(actions).sum(1).unsqueeze(1) #[n_envs,1]
 
         return actions.detach().cpu().numpy()[0], log_probs,  values
         #     [n_envs,1]  [n_envs,1] [n_envs,1]
         
         
-    def forward_given_actions(self, state: torch.Tensor, action: torch.Tensor,) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward_given_actions(self, state: torch.Tensor, action: torch.Tensor):
 
         dists, values = self.network(state)
+
+        #if np.random.randint(10) == 7:
+        #    print('------------------------')
+        #    print('mean:', dists.loc[0])
+        #    print('std:', dists.scale[0])
+        #    print('------------------------')
 
         log_probs = dists.log_prob(action).sum(1).unsqueeze(1) #[n_envs,1]
         entropies = dists.entropy().sum(1).unsqueeze(1) #[n_envs,1]
 
         return log_probs, values, entropies
     
-    
-    def collect_rollout(self, states: np.ndarray, ) -> Tuple[Rollout, np.ndarray]:
-        rollout_list = []
-        for step in range(self.args.n_step):
 
-            # Turn states into torch tensor:
-            states_t = torch.FloatTensor(states, device=self.args.device)  # (venv,n_state)
+    def calculate_returns(self, memories, rollout_len, next_val):
 
-            actions, log_probs, values = self.forward(states_t)
-            # [n_envs,1],[n_envs,1] [n_envs,1] [n_envs,1],[n_envs, hidden_size]
+        #Initialize the advantages:
+        advantages = torch.zeros(next_val.size()[0] ,rollout_len+1)
+        advantages_list = [None]*rollout_len
+        gae_lambda = 0.95
 
-            actions_np = actions.numpy()
+        Qval = next_val
+        returns_list = [] 
 
-            # Take that action for each environment
-            next_states, rewards, dones = self.vecenv.step(actions_np)
-            # np arrays of (n_envs,n_states)  (n_envs,1), (n_envs,1)
-
-            # Record transition
-            trans = self.Transition(torch.Tensor(rewards), torch.Tensor(1.0 - dones), states_t, actions, log_probs,values)
-            rollout_list.append(trans)
-
-            states = next_states
-
-        _, next_values = self.network(torch.tensor(next_states, dtype=torch.float32, device=self.args.device))
-
-        return (self.Rollout(rollout_list, next_values.detach()), next_states)
-    
-    
-
-    def calculate_gae(rollout: Rollout, gamma: float, gae_lambda: float) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
-
-
-        advantages = torch.zeros(rollout.target_value.size()[0] ,len(rollout.list)+1)
-        advantages_list = [None]*len(rollout.list)
-
-        Qval = rollout.target_value
-        returns_list = []  # [None]*len(rollout.list)
-        
-        rollout_list = rollout.list
         with torch.no_grad():
-            for t in reversed(range(len(rollout.list))):
+            for t in reversed(range(rollout_len)):
 
-                #ADVANTAGE CALCULATION
+                #Advantage Calculation
                 #If that is the last rollout timestep:
-                if t == len(rollout.list) - 1:
-                    next_val = rollout.target_value
+                if t == rollout_len - 1:
+                    next_v = next_val
                 else:
-                    next_val = rollout_list[t+1].value
-
-                delta = rollout_list[t].reward + (gamma * next_val * rollout_list[t].done) - rollout_list[t].value
-                advantages[:,t] = torch.add(delta.squeeze(), (gamma * gae_lambda * advantages[:,t+1].unsqueeze(1) * (rollout_list[t].done)).squeeze())
+                    next_val = memories.values[t+1]
+                
+                #First calculate the td error and then gae:
+                delta = memories.rewards[t] + (self.gamma * next_val * memories.dones[t]) - memories.values[t]
+                advantages[:,t] = torch.add(delta.squeeze(), (self.gamma * gae_lambda * advantages[:,t+1].unsqueeze(1) * (memories.dones[t])).squeeze())
                 advantages_list[t] = advantages[:,t].unsqueeze(1)
 
-                #RETURN CALCULATION
-                Qval = rollout_list[t].reward + gamma * Qval * rollout_list[t].done
+                #Return calculation
+                Qval = memories.rewards[t] + self.gamma * Qval * memories.dones[t]
                 returns_list.insert(0,Qval)
-
+        
         return advantages_list, returns_list
-    
-    
-    def rollout_data_loader(rollout: Rollout, advantages: List[torch.Tensor], returns: List[torch.Tensor],) -> TrainData:
         
-        #reward done state action log_prob value entropy
 
-        # [16*5,1],[16*5,1], [16*5, 8], [16*5, 1]
-        rewards, dones, states, actions, log_probs, values, entropies = [
-            torch.cat(tensor, dim=0) for tensor in zip(*rollout.list)
-        ]
-        advantages = torch.cat(advantages, dim=0)
-        returns = torch.cat(returns, dim=0)
-        return A2C.TrainData(
-            log_probs, #[16*5, 1]
-            advantages, #[16*5, 1]
-            returns, #[16*5, 1]
-            values, #[16*5, 1]
-            entropies, #[16*5, 1]
-        )
-        
-        
-    def update(self,  rollout_data: TrainData) -> Tuple[float, float, float]:
-        # Dont forget to detach returns and advantages
-        
-        returns = rollout_data.returns.detach()
-        log_probs = rollout_data.log_prob
-        values = rollout_data.value
-        entropies = rollout_data.entropy
+    def update(self,  rollout_data_gen):
 
-        gae = rollout_data.advantage.detach()
-        advantages = returns - values
+        #We'll be storing batch losses
+        critic_losses = []
+        actor_losses = []
+        entropy_losses = []
 
-        critic_loss = advantages.pow(2).mean()
-        actor_loss = -(log_probs * gae).mean()
-        entropy_loss = entropies.mean()
+        #clip_range = next(clip_schedule)
+        self.clip_range =  max(0.15, self.clip_range - 0.001)
 
-        loss = actor_loss + self.args.value_coef * critic_loss - self.args.entropy_coef * entropy_loss
+        #For n_epochs:
+        for _ in range(self.n_epochs):
+            #Loop through batches:
+            for batch_data in rollout_data_gen:
+               
+                #Obtain batch components:
+                states, actions, rewards, old_log_probs, dones, advantages, returns, batch_indices = batch_data
+                old_log_probs = old_log_probs.detach() #[bs,1]
+                advantages = advantages.detach()
+                #advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-10) #Further reduce the variance!
+                returns = returns.detach() #[bs,1]
+                #Gradients false
 
-        self.optim.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.network.parameters(), 0.5) #0.5
-        self.optim.step()
+                #Get new probs, values and entropies:
+                new_log_probs, values, entropies = self.forward_given_actions(states,actions)
+                #[bs,1], [bs,1], [bs,1]  with gradients True
+                #advantages = returns.detach() - values.detach() 
+
+                #Calculate clipped objective
+                prob_ratios = new_log_probs.exp()/old_log_probs.exp()
+                weighted_probs = prob_ratios * advantages
+                weighted_clipped_probs = torch.clamp(prob_ratios, 1 - self.clip_range, 1 + self.clip_range) * advantages
+
+                #Calculate loss terms:
+                actor_loss = -torch.min(weighted_probs, weighted_clipped_probs).mean()
+                critic_loss = ((returns-values).pow(2)).mean()
+                entropy_loss = entropies.mean()
+
+                #Calculate final cost:
+                loss = actor_loss + self.value_coeff * critic_loss - self.entropy_coeff * entropy_loss
+
+                #Take a gradient step
+                self.optim.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.network.parameters(), 0.5)
+                self.optim.step()
+
+                #Store batch losses
+                critic_losses.append(critic_loss.detach().item())
+                actor_losses.append(actor_loss.detach().item())
+                entropy_losses.append(entropy_loss.detach().item())
+
+        print()
+        print('************ ROLLOUT UPDATE PERFORMED *************** ')
+        print('Critic Loss:',sum(critic_losses)/len(critic_losses), 
+              ' Actor Loss:', sum(actor_losses)/len(actor_losses),
+              ' Entropy Loss:', sum(entropy_losses)/len(entropy_losses))
+        print()
