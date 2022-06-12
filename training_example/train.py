@@ -117,14 +117,14 @@ def train():
     
     if MODEL == 'PPO':
         hyperparams = {
-        "lr": 0.001,
+        "lr": 0.0001,
         "gamma": 0.99,
         "value_coeff": 0.5,
         "entropy_coeff": 0.001,
         "episodes": 10000,
-        "batchsize": 32,
+        "batchsize": 64,
         "maxlength": 10000,
-        "rollout_len":256,
+        "rollout_len":512,
         "n_epochs":4,
         }
     
@@ -335,12 +335,17 @@ def save_model(agent, reward, name):
 
 def load_model(agent, reward, name):
     try:
-        path = "trained_models/" + name + "_" + str(int(reward)) + ".dat"
-        checkpoint = torch.load(path)
+        if MODEL == 'PPO':
+            path = "trained_models/" + name + "_" + str(int(reward)) + "_ppo.dat"
+            checkpoint = torch.load(path)
+            agent.network.load_state_dict(checkpoint["state_dict"])
+        else:
+            path = "trained_models/" + name + "_" + str(int(reward)) + ".dat"
+            checkpoint = torch.load(path)
 
-        agent.actor.load_state_dict(checkpoint["actor_state_dict"])
-        agent.critic_1.load_state_dict(checkpoint["critic_1_state_dict"])
-        agent.critic_2.load_state_dict(checkpoint["critic_2_state_dict"])
+            agent.actor.load_state_dict(checkpoint["actor_state_dict"])
+            agent.critic_1.load_state_dict(checkpoint["critic_1_state_dict"])
+            agent.critic_2.load_state_dict(checkpoint["critic_2_state_dict"])
 
     except FileNotFoundError:
         print("Checkpoint Not Found")
