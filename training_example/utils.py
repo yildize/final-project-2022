@@ -36,19 +36,18 @@ class Memory:
 
 class Memory_PPO:
     def __init__(self, rollout_len):
-        self.Memory = namedtuple("Memory", "states actions rewards log_probs dones values")
-        self.memories =  self.Memory([],[],[],[],[],[])
+        self.Memory = namedtuple("Memory", "states actions rewards log_probs dones")
+        self.memories =  self.Memory([],[],[],[],[])
         self.rollout_len = rollout_len
         self.next_value = None
 
     # append experience to the replay memory
-    def push(self, state, action, reward, next_state, log_prob, value, done):
+    def push(self, state, action, reward, next_state, log_prob, done):
         self.memories.states.append(torch.FloatTensor(state).unsqueeze(0)) #state, next state numpy array of (41,)
         self.memories.actions.append(torch.FloatTensor(action).unsqueeze(0)) #action numpy array of (2,)
-        self.memories.rewards.append(torch.tensor([[reward]])) #reward int
+        self.memories.rewards.append(torch.tensor([[reward]], dtype=torch.float32)) #reward int
         self.memories.log_probs.append(log_prob) #log prob tensor of size [1,1]
         self.memories.dones.append(torch.tensor([[1-done*1]])) #done boolean
-        self.memories.values.append(value) #value tensor of size [1,1]
        
     
 
@@ -61,19 +60,19 @@ class Memory_PPO:
         log_probs = torch.cat(self.memories.log_probs).detach() #[rollout_len, 1]
         dones = torch.cat(self.memories.dones) #[rollout_len, 1]
         
-        advantages = torch.cat(advantages, dim=0) #[rollout_len, 1]
-        returns = torch.cat(returns, dim=0) #[rollout_len, 1]        
+        #advantages = torch.cat(advantages, dim=0) #[rollout_len, 1]
+        returns = torch.cat(returns, dim=0) #[rollout_len, 1]  
+        returns = (returns - returns.mean()) / max(returns.std(), 1e-7)  
 
         for _ in range(n_epochs):
             indices = np.arange(self.rollout_len, dtype=np.int64)
             np.random.shuffle(indices)
             for start_index in np.arange(0, self.rollout_len, batch_size):
                 batch_indices = indices[start_index:start_index+batch_size]
-                #batch_indices = np.random.choice(indices, batch_size, replace=False)
-                yield  states[batch_indices], actions[batch_indices], rewards[batch_indices], log_probs[batch_indices],  dones[batch_indices], advantages[batch_indices], returns[batch_indices], batch_indices
+                yield  states[batch_indices], actions[batch_indices], rewards[batch_indices], log_probs[batch_indices],  dones[batch_indices],  returns[batch_indices]
 
-    def clean(self):
-        self.memories =  self.Memory([],[],[],[],[],[])
+    def clear(self):
+        self.memories =  self.Memory([],[],[],[],[])
 
     def __len__(self):
         return len(self.memories.rewards)

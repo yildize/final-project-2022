@@ -1,33 +1,62 @@
 import numpy as np
 import torch
+import torch.nn as nn
 from torch.distributions import Normal
+from torch.distributions import MultivariateNormal
 
 class DenseNet(torch.nn.Module):
     
-    def __init__(self, in_size: int, out_size: int, hidden: int = 128):
+    def __init__(self, in_size: int, out_size: int, initial_act_std, hidden: int = 128, ):
         super().__init__()
-        self.base = torch.nn.Sequential(
-            torch.nn.Linear(in_size, hidden),
-            torch.nn.ReLU()
-            #torch.nn.Linear(hidden, hidden)
-            #torch.nn.ReLU()
+        self.out_size = out_size
+        
+        self.action_var = torch.full((out_size,), initial_act_std * initial_act_std)
+
+        self.actor = nn.Sequential(
+            nn.Linear(in_size, 64),
+            nn.Tanh(),
+            nn.Linear(64, 64),
+            nn.Tanh(),
+            nn.Linear(64, out_size),
+        )
+        
+        self.critic = nn.Sequential(
+            nn.Linear(in_size, 64),
+            nn.Tanh(),
+            nn.Linear(64, 64),
+            nn.Tanh(),
+            nn.Linear(64, 1)
         )
 
-        self.mu = torch.nn.Sequential(
-            torch.nn.Linear(hidden, out_size),
-            torch.nn.Tanh()
-        )
+    
+    def set_action_std(self, act_std):
+        self.action_var = torch.full((self.out_size,), act_std * act_std)
+        
+    def act(self, state):
 
-        self.std = torch.nn.Sequential(
-            torch.nn.Linear(hidden, out_size),
-            torch.nn.Softplus()
-        )
+        action_mean = self.actor(state)
+        cov_mat = torch.diag(self.action_var).unsqueeze(dim=0)
+        dist = MultivariateNormal(action_mean, cov_mat)
 
-        self.value = torch.nn.Linear(hidden,1)
+        action = dist.sample()
+        action = torch.clamp(action, -1, 1)
+        action_logprob = dist.log_prob(action)
+    
+        return action.detach(), action_logprob.detach()
+    
+    
+    def evaluate(self, state, action):
+    
 
-    def forward(self, state: torch.Tensor):
-        x = self.base(state)
-        mu = self.mu(x)
-        std = torch.clamp(self.std(x),0,3)
-        dist = Normal(mu, std)
-        return dist, self.value(x)
+        action_mean = self.actor(state)
+        
+        action_var = self.action_var.expand_as(action_mean)
+        cov_mat = torch.diag_embed(action_var)
+        dist = MultivariateNormal(action_mean, cov_mat)
+
+        action_logprobs = dist.log_prob(action)
+        dist_entropy = dist.entropy()
+        state_values = self.critic(state)
+    
+
+        return action_logprobs, state_values, dist_entropy

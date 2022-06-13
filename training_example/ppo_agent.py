@@ -1,13 +1,15 @@
 import numpy as np
 import torch
+import torch.nn as nn
 import itertools
 from network_ppo import DenseNet
 from utils import Memory_PPO
 from torch.autograd import Variable
+from torch.distributions import MultivariateNormal
 
 
 class Model(torch.nn.Module):
-    def __init__(self, env, params, n_insize, n_outsize):
+    def __init__(self, env, params, n_insize, n_outsize, initial_act_std=0.6):
         super().__init__()
         self.n_states = n_insize
         self.n_actions = n_outsize
@@ -16,73 +18,65 @@ class Model(torch.nn.Module):
         self.value_coeff = params.value_coeff
         self.entropy_coeff = params.entropy_coeff
         self.episodes = params.episodes
-        self.clip_range = 0.3
+        self.clip_range = params.clip_range
+        self.action_std = initial_act_std
+        
 
         #create network:
-        self.network = DenseNet(self.n_states, self.n_actions)
+        self.policy = DenseNet(self.n_states, self.n_actions, initial_act_std)
+        self.optim = torch.optim.Adam([
+            {'params': self.policy.actor.parameters(), 'lr': params.lr_actor},
+            {'params': self.policy.critic.parameters(), 'lr': params.lr_critic}
+        ])
         
-        #optimizer
-        self.optim = torch.optim.Adam(self.network.parameters(), lr=params.lr)
+        
+        self.policy_old = DenseNet(self.n_states, self.n_actions, initial_act_std)
+        self.policy_old.load_state_dict(self.policy.state_dict())
+        
+        self.MseLoss = nn.MSELoss()
 
         # make a replay buffer memory ro store experiences
         self.memory = Memory_PPO(params.rollout_len)
 
-        
-    def select_action(self, state):
-        
-        state = Variable(torch.from_numpy(state).float().unsqueeze(0))
-        dists, values = self.network(state) 
-    
-        #Calculate actions and their corresponding log_probs:
-        actions = dists.sample()#[n_envs,1]
-        actions = torch.clamp(actions, min=-1, max=1) #clip
-        log_probs = dists.log_prob(actions).sum(1).unsqueeze(1) #[n_envs,1]
 
-        return actions.detach().cpu().numpy()[0], log_probs,  values
-        #     [n_envs,1]  [n_envs,1] [n_envs,1]
+        
+    def set_action_std(self, new_action_std):
+        self.action_std = new_action_std
+        self.policy.set_action_std(new_action_std)
+        self.policy_old.set_action_std(new_action_std)
+        
+    def decay_action_std(self, action_std_decay_rate, min_action_std):
+        self.action_std = self.action_std - action_std_decay_rate
+        self.action_std = round(self.action_std, 4)
+        if (self.action_std <= min_action_std):
+            self.action_std = min_action_std
+        self.set_action_std(self.action_std)
+            
+            
+    def select_action(self, state):  
+        
+        with torch.no_grad():
+            state = torch.FloatTensor(state)
+            action, action_logprob = self.policy_old.act(state)
+
+        return action.detach().cpu().numpy()[0], action_logprob
         
         
     def forward_given_actions(self, state: torch.Tensor, action: torch.Tensor):
 
-        dists, values = self.network(state)
-
-        #if np.random.randint(10) == 7:
-        #    print('------------------------')
-        #    print('mean:', dists.loc[0])
-        #    print('std:', dists.scale[0])
-        #    print('------------------------')
-
-        log_probs = dists.log_prob(action).sum(1).unsqueeze(1) #[n_envs,1]
-        entropies = dists.entropy().sum(1).unsqueeze(1) #[n_envs,1]
-
+        log_probs, values, entropies = self.policy.evaluate(state, action)
         return log_probs, values, entropies
     
 
-    def calculate_returns(self, memories, rollout_len, next_val):
+    def calculate_returns(self, memories, rollout_len):
 
-        #Initialize the advantages:
-        advantages = torch.zeros(next_val.size()[0] ,rollout_len+1)
-        advantages_list = [None]*rollout_len
-        gae_lambda = 0.95
-
-        Qval = next_val
+        advantages_list = []
+        
+        Qval = 0 
         returns_list = [] 
 
         with torch.no_grad():
             for t in reversed(range(rollout_len)):
-
-                #Advantage Calculation
-                #If that is the last rollout timestep:
-                if t == rollout_len - 1:
-                    next_v = next_val
-                else:
-                    next_val = memories.values[t+1]
-                
-                #First calculate the td error and then gae:
-                delta = memories.rewards[t] + (self.gamma * next_val * memories.dones[t]) - memories.values[t]
-                advantages[:,t] = torch.add(delta.squeeze(), (self.gamma * gae_lambda * advantages[:,t+1].unsqueeze(1) * (memories.dones[t])).squeeze())
-                advantages_list[t] = advantages[:,t].unsqueeze(1)
-
                 #Return calculation
                 Qval = memories.rewards[t] + self.gamma * Qval * memories.dones[t]
                 returns_list.insert(0,Qval)
@@ -93,58 +87,52 @@ class Model(torch.nn.Module):
     def update(self,  rollout_data_gen):
 
         #We'll be storing batch losses
-        critic_losses = []
-        actor_losses = []
-        entropy_losses = []
+        losses = []
 
         #clip_range = next(clip_schedule)
-        self.clip_range =  max(0.15, self.clip_range - 0.001)
+        #self.clip_range =  max(0.15, self.clip_range - 0.001)
 
         #For n_epochs:
         for _ in range(self.n_epochs):
             #Loop through batches:
             for batch_data in rollout_data_gen:
-               
+
                 #Obtain batch components:
-                states, actions, rewards, old_log_probs, dones, advantages, returns, batch_indices = batch_data
+                states, actions, rewards, old_log_probs, dones, returns = batch_data
                 old_log_probs = old_log_probs.detach() #[bs,1]
-                advantages = advantages.detach()
-                #advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-10) #Further reduce the variance!
                 returns = returns.detach() #[bs,1]
                 #Gradients false
 
                 #Get new probs, values and entropies:
-                new_log_probs, values, entropies = self.forward_given_actions(states,actions)
-                #[bs,1], [bs,1], [bs,1]  with gradients True
-                #advantages = returns.detach() - values.detach() 
-
+                new_log_probs, values, entropy = self.forward_given_actions(states,actions)
+                #values = torch.squeeze(values)
+                advantages = returns - values.detach()
+        
                 #Calculate clipped objective
-                prob_ratios = new_log_probs.exp()/old_log_probs.exp()
+                prob_ratios = torch.exp(new_log_probs - old_log_probs)
                 weighted_probs = prob_ratios * advantages
                 weighted_clipped_probs = torch.clamp(prob_ratios, 1 - self.clip_range, 1 + self.clip_range) * advantages
 
                 #Calculate loss terms:
-                actor_loss = -torch.min(weighted_probs, weighted_clipped_probs).mean()
-                critic_loss = ((returns-values).pow(2)).mean()
-                entropy_loss = entropies.mean()
+                actor_loss = -torch.min(weighted_probs, weighted_clipped_probs)
+                critic_loss = self.MseLoss(values, returns)
 
                 #Calculate final cost:
-                loss = actor_loss + self.value_coeff * critic_loss - self.entropy_coeff * entropy_loss
-
+                loss = actor_loss + self.value_coeff * critic_loss - self.entropy_coeff * entropy
+                
                 #Take a gradient step
                 self.optim.zero_grad()
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.network.parameters(), 0.5)
+                loss.mean().backward()
+                torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 0.5)
                 self.optim.step()
+                
+                #Record loss
+                losses.append(loss.mean().detach())
 
-                #Store batch losses
-                critic_losses.append(critic_loss.detach().item())
-                actor_losses.append(actor_loss.detach().item())
-                entropy_losses.append(entropy_loss.detach().item())
 
-        print()
+        # Copy new weights into old policy
+        self.policy_old.load_state_dict(self.policy.state_dict())
         print('************ ROLLOUT UPDATE PERFORMED *************** ')
-        print('Critic Loss:',sum(critic_losses)/len(critic_losses), 
-              ' Actor Loss:', sum(actor_losses)/len(actor_losses),
-              ' Entropy Loss:', sum(entropy_losses)/len(entropy_losses))
+        print('Loss:',sum(losses)/len(losses))
+        print('Action std:', self.action_std)
         print()

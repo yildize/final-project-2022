@@ -409,7 +409,7 @@ class SimstarEnv(gym.Env):
 
         if np.abs(trackPos) >= 0.9:
             print("[SimstarEnv] finish episode due to road deviation")
-            reward = -30#-100
+            reward = -350#-30#-100
             summary["end_reason"] = "road_deviation"
             done = True
 
@@ -418,7 +418,7 @@ class SimstarEnv(gym.Env):
             reward -= 0.1
             if self.terminal_judge_start < self.time_step_slow:
                 print("[SimstarEnv] finish episode due to agent is too slow")
-                reward = -30#-50
+                reward = -300#-30#-50
                 summary["end_reason"] = "too_slow"
                 done = True
         else:

@@ -13,7 +13,7 @@ from ppo_agent import Model as ModelPPO
 
 
 MODEL = ['SAC', 'PPO'][1] 
-TRANSFER = 0
+TRANSFER = 1
 # bot vehicles will be added; the configuration and speed of other vehicles could be changed from simstarEnv.py
 WITH_OPPONENT = False
 # port number has to be the same with the SimStar.sh -nullrhi -api-port=PORT
@@ -28,10 +28,10 @@ TRAIN = 1
 USE_WANDB = False
 
 # ./trained_models/EVALUATION_NAME_{EVALUATION_REWARD};      will be used only if TRAIN = 0
-EVALUATION_REWARD = 24565#1653569#1653569#2928465 #-113009#131311#24559
+EVALUATION_REWARD = 303#1653569#1653569#2928465 #-113009#131311#24559
 
 # "best" or "checkpoint";      will be used only if TRAIN = 0
-EVALUATION_NAME = "best"
+EVALUATION_NAME = "checkpoint"
 
 # "Racing"
 TRACK_NAME = simstar.Environments.Racing
@@ -117,22 +117,28 @@ def train():
     
     if MODEL == 'PPO':
         hyperparams = {
-        "lr": 0.0001,
+        "lr_actor": 0.003,
+        "lr_critic": 0.003,
         "gamma": 0.99,
         "value_coeff": 0.5,
         "entropy_coeff": 0.001,
         "episodes": 10000,
-        "batchsize": 64,
+        "batchsize": 16,
         "maxlength": 10000,
-        "rollout_len":512,
-        "n_epochs":4,
+        "rollout_len":128,
+        "n_epochs":8,
+        "clip_range": 0.2,
+        "action_std": 0.4,
+        "action_std_decay_rate": 0.01,
+        "min_action_std": 0.05,
+        "action_std_decay_freq": 20,
         }
     
     HyperParams = namedtuple("HyperParams", hyperparams.keys())
     hyprm = HyperParams(**hyperparams)
 
     if MODEL == 'PPO':
-        agent = ModelPPO(env, hyprm, insize, outsize)
+        agent = ModelPPO(env, hyprm, insize, outsize, hyprm.action_std)
     else:
         agent = Model(env, hyprm, insize, outsize)
         
@@ -151,6 +157,7 @@ def train():
     total_steps = 0
 
     for eps in range(hyprm.episodes):
+        decay_action_std = True
         obs = env.reset()
         state = np.hstack(
             (obs.angle, obs.speedX, obs.speedY, obs.opponents, obs.track, obs.trackPos)
@@ -161,7 +168,7 @@ def train():
         for step in range(hyprm.maxlength):
 
             if MODEL == 'PPO':
-                action, log_prob, value = agent.select_action(state=state)
+                action, log_prob = agent.select_action(state=state)
                 action = np.array(action)
             else:
                 action = np.array(agent.select_action(state=state))
@@ -187,12 +194,16 @@ def train():
 
             if TRAIN:
                 if MODEL == 'PPO':
-                    agent.memory.push(state, action, reward, next_state, log_prob, value, done)
+                    agent.memory.push(state, action, reward, next_state, log_prob, done)
                     if len(agent.memory) >= hyprm.rollout_len:
-                        _,_,next_value = agent.select_action(state=state)
-                        advantages, returns = agent.calculate_returns(agent.memory.memories, hyprm.rollout_len, next_value.detach())
+                        advantages, returns = agent.calculate_returns(agent.memory.memories, hyprm.rollout_len)
                         agent.update(agent.memory.sample(hyprm.n_epochs, hyprm.batchsize, advantages, returns))
-                        agent.memory.clean()
+                        agent.memory.clear()
+                    if (eps % hyprm.action_std_decay_freq == 0) and decay_action_std:
+                        agent.decay_action_std(hyprm.action_std_decay_rate, hyprm.min_action_std)
+                        decay_action_std = False
+                    
+                        
                 else:
                     agent.memory.push(state, action, reward, next_state, done)
                     if len(agent.memory.memories) > hyprm.batchsize:
@@ -225,6 +236,7 @@ def train():
         average_reward = torch.mean(torch.tensor(total_reward[-20:])).item()
 
         total_steps = total_steps + step
+                
         lap_progress = env.progress_on_road
 
         if TRAIN:
@@ -315,7 +327,7 @@ def save_model(agent, reward, name):
         path = "saved_models/" + name + "_" + str(int(reward)) + "_ppo.dat"
         torch.save(
             {
-            "state_dict": agent.network.state_dict(),
+            "policy_old_dict": agent.policy_old.state_dict(),
             "episode_reward": reward,
             },
             path,
@@ -338,7 +350,8 @@ def load_model(agent, reward, name):
         if MODEL == 'PPO':
             path = "trained_models/" + name + "_" + str(int(reward)) + "_ppo.dat"
             checkpoint = torch.load(path)
-            agent.network.load_state_dict(checkpoint["state_dict"])
+            agent.policy_old.load_state_dict(checkpoint["policy_old_dict"])
+            agent.policy.load_state_dict(checkpoint["policy_old_dict"])
         else:
             path = "trained_models/" + name + "_" + str(int(reward)) + ".dat"
             checkpoint = torch.load(path)
