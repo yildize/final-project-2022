@@ -30,17 +30,15 @@ class Model(torch.nn.Module):
         
     def select_action(self, state):
         
-        state = Variable(torch.from_numpy(state).float().unsqueeze(0))
-        dists, values = self.network(state) 
-    
+        state = torch.FloatTensor(state).unsqueeze(0) #[1,41]
+        dists, value = self.network(state) # value [1,1]
+
         #Calculate actions and their corresponding log_probs:
-        actions = dists.sample()#[n_envs,1]
-        actions = torch.clamp(actions, min=-1, max=1) #clip
-
-        log_probs = dists.log_prob(actions).sum(1).unsqueeze(0) #[n_envs,1]
-
-        return actions.detach().cpu().numpy()[0], log_probs,  values
-        #     [n_envs,1]  [n_envs,1] [n_envs,1]
+        actions = dists.sample() #[1,2]
+        actions = torch.clamp(actions, min=-1, max=1) #[1,2]
+        log_prob = dists.log_prob(actions).sum(1).unsqueeze(0) #[1,1]
+        
+        return actions.detach().cpu().numpy()[0], log_prob,  value
         
         
     def forward_given_actions(self, state: torch.Tensor, action: torch.Tensor):
@@ -71,10 +69,10 @@ class Model(torch.nn.Module):
                 if t == rollout_len - 1:
                     next_v = next_val
                 else:
-                    next_val = memories.values[t+1]
+                    next_v = memories.values[t+1]
                 
                 #First calculate the td error and then gae:
-                delta = memories.rewards[t] + (self.gamma * next_val * memories.dones[t]) - memories.values[t]
+                delta = memories.rewards[t] + (self.gamma * next_v * memories.dones[t]) - memories.values[t]
                 advantages[:,t] = torch.add(delta.squeeze(), (self.gamma * gae_lambda * advantages[:,t+1].unsqueeze(1) * (memories.dones[t])).squeeze())
                 advantages_list[t] = advantages[:,t].unsqueeze(1)
 
@@ -100,22 +98,19 @@ class Model(torch.nn.Module):
             #Loop through batches:
             for batch_data in rollout_data_gen:
                
+                #Gradients false
                 #Obtain batch components:
                 states, actions, rewards, old_log_probs, dones, advantages, returns, batch_indices = batch_data
-                old_log_probs = old_log_probs.detach() #[bs,1]
-                #advantages = advantages.detach()
                 #advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-10) #Further reduce the variance!
-                returns = returns.detach() #[bs,1]
-                #Gradients false
-
-
+                
+                #Gradients true
                 #Get new probs, values and entropies:
                 new_log_probs, values, entropies = self.forward_given_actions(states,actions)
                 #[bs,1], [bs,1], [bs,1]  with gradients True
-                advantages = returns - values.detach() 
+                #advantages = returns - values.detach() 
                 
-                advantages = (advantages - advantages.mean()) / max(advantages.std(), 1e-5)
-                returns = (returns - returns.mean()) / max(returns.std(), 1e-5)
+                #advantages = (advantages - advantages.mean()) / max(advantages.std(), 1e-5)
+                #returns = (returns - returns.mean()) / max(returns.std(), 1e-5)
 
                 #Calculate clipped objective
                 prob_ratios = new_log_probs.exp()/old_log_probs.exp()

@@ -13,7 +13,7 @@ from ppo_agent import Model as ModelPPO
 
 
 MODEL = ['SAC', 'PPO'][1] 
-TRANSFER = 1
+TRANSFER = 0
 # bot vehicles will be added; the configuration and speed of other vehicles could be changed from simstarEnv.py
 WITH_OPPONENT = False
 # port number has to be the same with the SimStar.sh -nullrhi -api-port=PORT
@@ -117,15 +117,15 @@ def train():
     
     if MODEL == 'PPO':
         hyperparams = {
-        "lr": 0.0005,
+        "lr": 0.0001,
         "gamma": 0.99,
         "value_coeff": 0.5,
-        "entropy_coeff": 0.001,
+        "entropy_coeff": 0.01,
         "episodes": 10000,
-        "batchsize": 64,
+        "batchsize": 32,
         "maxlength": 10000,
-        "rollout_len":512,
-        "n_epochs":4,
+        "rollout_len":128,
+        "n_epochs":10,
         }
     
     HyperParams = namedtuple("HyperParams", hyperparams.keys())

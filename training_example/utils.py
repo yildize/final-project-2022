@@ -51,10 +51,10 @@ class Memory_PPO:
         self.memories.values.append(value) #value tensor of size [1,1]
        
     
-
     # get experience sample of batch size
     def sample(self, n_epochs, batch_size, advantages, returns):
-
+        
+        #Grad false for all of the following:
         states = torch.cat(self.memories.states) #[rollout_len, 41]
         actions = torch.cat(self.memories.actions) #[rollout_len, 2]
         rewards = torch.cat(self.memories.rewards) #[rollout_len, 1]
@@ -62,8 +62,9 @@ class Memory_PPO:
         dones = torch.cat(self.memories.dones) #[rollout_len, 1]
         
         advantages = torch.cat(advantages, dim=0) #[rollout_len, 1]
-        returns = torch.cat(returns, dim=0) #[rollout_len, 1]        
-
+        returns = torch.cat(returns, dim=0) #[rollout_len, 1]    
+        
+        #Yield batches for n_epochs
         for _ in range(n_epochs):
             indices = np.arange(self.rollout_len, dtype=np.int64)
             np.random.shuffle(indices)
