@@ -375,7 +375,7 @@ class SimstarEnv(gym.Env):
 
         #Normalized track-pos reward:
         if spd > 5:
-            track_pos_reward = self.linear_reward_shaper(trackPos, 0.5)
+            track_pos_reward = self.linear_reward_shaper(trackPos, 0.3)
             #Normalizes steer reward:
             small_steer_reward = self.linear_reward_shaper(abs(action[0]), 0.01)
         else:
@@ -391,7 +391,7 @@ class SimstarEnv(gym.Env):
         high_accel_reward = self.linear_reward_shaper((1-action[1]), 1)
 
         
-        weights = [30, 5, 0, 2, 5]
+        weights = [30, 12, 0, 0, 0]
         total_reward = (weights[0]*progress_reward + 
                         weights[1]*track_pos_reward + 
                         weights[2]*small_accel_reward + 
@@ -409,7 +409,7 @@ class SimstarEnv(gym.Env):
 
         if np.abs(trackPos) >= 0.9:
             print("[SimstarEnv] finish episode due to road deviation")
-            reward = -30#-100
+            reward = -500#-30#-100
             summary["end_reason"] = "road_deviation"
             done = True
 
@@ -418,7 +418,7 @@ class SimstarEnv(gym.Env):
             reward -= 0.1
             if self.terminal_judge_start < self.time_step_slow:
                 print("[SimstarEnv] finish episode due to agent is too slow")
-                reward = -30#-50
+                reward = -300#-30#-50
                 summary["end_reason"] = "too_slow"
                 done = True
         else:

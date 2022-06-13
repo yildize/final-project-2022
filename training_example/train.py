@@ -13,7 +13,7 @@ from ppo_agent import Model as ModelPPO
 
 
 MODEL = ['SAC', 'PPO'][1] 
-TRANSFER = 0
+TRANSFER = 1
 # bot vehicles will be added; the configuration and speed of other vehicles could be changed from simstarEnv.py
 WITH_OPPONENT = False
 # port number has to be the same with the SimStar.sh -nullrhi -api-port=PORT
@@ -28,10 +28,10 @@ TRAIN = 1
 USE_WANDB = False
 
 # ./trained_models/EVALUATION_NAME_{EVALUATION_REWARD};      will be used only if TRAIN = 0
-EVALUATION_REWARD = 24565#1653569#1653569#2928465 #-113009#131311#24559
+EVALUATION_REWARD = 4034#1653569#1653569#2928465 #-113009#131311#24559
 
 # "best" or "checkpoint";      will be used only if TRAIN = 0
-EVALUATION_NAME = "best"
+EVALUATION_NAME = "checkpoint"
 
 # "Racing"
 TRACK_NAME = simstar.Environments.Racing
@@ -117,7 +117,7 @@ def train():
     
     if MODEL == 'PPO':
         hyperparams = {
-        "lr": 0.0001,
+        "lr": 0.0005,
         "gamma": 0.99,
         "value_coeff": 0.5,
         "entropy_coeff": 0.001,

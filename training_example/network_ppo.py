@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from torch.distributions import Normal
+from torch.distributions import Normal, MultivariateNormal
 
 class DenseNet(torch.nn.Module):
     
@@ -9,8 +9,6 @@ class DenseNet(torch.nn.Module):
         self.base = torch.nn.Sequential(
             torch.nn.Linear(in_size, hidden),
             torch.nn.ReLU()
-            #torch.nn.Linear(hidden, hidden)
-            #torch.nn.ReLU()
         )
 
         self.mu = torch.nn.Sequential(
@@ -30,4 +28,7 @@ class DenseNet(torch.nn.Module):
         mu = self.mu(x)
         std = torch.clamp(self.std(x),0,3)
         dist = Normal(mu, std)
+        #cov_mat = torch.diag_embed(std)
+        #dist = MultivariateNormal(mu, cov_mat)
+        
         return dist, self.value(x)

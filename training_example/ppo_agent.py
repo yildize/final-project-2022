@@ -16,7 +16,7 @@ class Model(torch.nn.Module):
         self.value_coeff = params.value_coeff
         self.entropy_coeff = params.entropy_coeff
         self.episodes = params.episodes
-        self.clip_range = 0.3
+        self.clip_range = 0.1
 
         #create network:
         self.network = DenseNet(self.n_states, self.n_actions)
@@ -36,7 +36,8 @@ class Model(torch.nn.Module):
         #Calculate actions and their corresponding log_probs:
         actions = dists.sample()#[n_envs,1]
         actions = torch.clamp(actions, min=-1, max=1) #clip
-        log_probs = dists.log_prob(actions).sum(1).unsqueeze(1) #[n_envs,1]
+
+        log_probs = dists.log_prob(actions).sum(1).unsqueeze(0) #[n_envs,1]
 
         return actions.detach().cpu().numpy()[0], log_probs,  values
         #     [n_envs,1]  [n_envs,1] [n_envs,1]
@@ -45,12 +46,6 @@ class Model(torch.nn.Module):
     def forward_given_actions(self, state: torch.Tensor, action: torch.Tensor):
 
         dists, values = self.network(state)
-
-        #if np.random.randint(10) == 7:
-        #    print('------------------------')
-        #    print('mean:', dists.loc[0])
-        #    print('std:', dists.scale[0])
-        #    print('------------------------')
 
         log_probs = dists.log_prob(action).sum(1).unsqueeze(1) #[n_envs,1]
         entropies = dists.entropy().sum(1).unsqueeze(1) #[n_envs,1]
@@ -98,7 +93,7 @@ class Model(torch.nn.Module):
         entropy_losses = []
 
         #clip_range = next(clip_schedule)
-        self.clip_range =  max(0.15, self.clip_range - 0.001)
+        #self.clip_range =  max(0.15, self.clip_range - 0.001)
 
         #For n_epochs:
         for _ in range(self.n_epochs):
@@ -108,15 +103,19 @@ class Model(torch.nn.Module):
                 #Obtain batch components:
                 states, actions, rewards, old_log_probs, dones, advantages, returns, batch_indices = batch_data
                 old_log_probs = old_log_probs.detach() #[bs,1]
-                advantages = advantages.detach()
+                #advantages = advantages.detach()
                 #advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-10) #Further reduce the variance!
                 returns = returns.detach() #[bs,1]
                 #Gradients false
 
+
                 #Get new probs, values and entropies:
                 new_log_probs, values, entropies = self.forward_given_actions(states,actions)
                 #[bs,1], [bs,1], [bs,1]  with gradients True
-                #advantages = returns.detach() - values.detach() 
+                advantages = returns - values.detach() 
+                
+                advantages = (advantages - advantages.mean()) / max(advantages.std(), 1e-5)
+                returns = (returns - returns.mean()) / max(returns.std(), 1e-5)
 
                 #Calculate clipped objective
                 prob_ratios = new_log_probs.exp()/old_log_probs.exp()
@@ -125,7 +124,7 @@ class Model(torch.nn.Module):
 
                 #Calculate loss terms:
                 actor_loss = -torch.min(weighted_probs, weighted_clipped_probs).mean()
-                critic_loss = ((returns-values).pow(2)).mean()
+                critic_loss = (torch.sqrt((returns-values).pow(2))).mean()
                 entropy_loss = entropies.mean()
 
                 #Calculate final cost:
