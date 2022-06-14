@@ -358,16 +358,33 @@ class SimstarEnv(gym.Env):
         trackPos = simstar_obs["trackPos"]
         angle = simstar_obs["angle"]
         spd = np.sqrt(simstar_obs["speedX"] ** 2 + simstar_obs["speedY"] ** 2)
-
-        #print('trackPos:', trackPos)
-        #print('angle:', angle)
-        #print('track', simstar_obs["track"])
-        #print('-----------------------------')
-
-        #progress = 5*spd * (np.cos(angle) - 2*np.abs(np.sin(angle)))
+        
         
         progress = spd * (np.cos(angle) - np.abs(np.sin(angle)))
-        
+        reward = progress
+
+        if collision:
+            print("[SimstarEnv] collision with opponent vehicle")
+            reward -= self.c_w * spd * spd
+
+        if np.abs(trackPos) >= 0.9:
+            print("[SimstarEnv] finish episode due to road deviation")
+            reward = -300
+            summary["end_reason"] = "road_deviation"
+            done = True
+
+        if progress < self.termination_limit_progress:
+            if self.terminal_judge_start < self.time_step_slow:
+                print("[SimstarEnv] finish episode due to agent is too slow")
+                reward = -100
+                summary["end_reason"] = "too_slow"
+                done = True
+        else:
+            self.time_step_slow = 0
+            
+
+        '''
+        progress = spd * (np.cos(angle) - np.abs(np.sin(angle)))
         
         #Normalized progress reward:
         progress_reward = progress/160
@@ -391,30 +408,29 @@ class SimstarEnv(gym.Env):
         high_accel_reward = self.linear_reward_shaper((1-action[1]), 1)
 
         
-        weights = [30, 12, 0, 0, 0]
+        weights = [30, 12, 0, 3, 0]
         total_reward = (weights[0]*progress_reward + 
                         weights[1]*track_pos_reward + 
                         weights[2]*small_accel_reward + 
                         weights[3]*high_accel_reward +
                         weights[4]*small_steer_reward)#/sum(weights)
         reward += total_reward
-
-        #print('total reward:', reward)
-        #print('----------------------------')
+        
 
         if collision:
             print("[SimstarEnv] collision with opponent vehicle")
             reward -= self.c_w * spd * spd
         
+        if np.abs(trackPos) >= 0.7:
+            reward -= 5
 
         if np.abs(trackPos) >= 0.9:
             print("[SimstarEnv] finish episode due to road deviation")
-            reward = -500#-30#-100
+            reward = -2000#-30#-100
             summary["end_reason"] = "road_deviation"
             done = True
 
         if progress < self.termination_limit_progress:
-            #reward -= 1
             reward -= 0.1
             if self.terminal_judge_start < self.time_step_slow:
                 print("[SimstarEnv] finish episode due to agent is too slow")
@@ -423,6 +439,7 @@ class SimstarEnv(gym.Env):
                 done = True
         else:
             self.time_step_slow = 0
+        '''
 
         self.progress_on_road = self.main_vehicle.get_progress_on_road()
 

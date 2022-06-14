@@ -28,10 +28,10 @@ TRAIN = 1
 USE_WANDB = False
 
 # ./trained_models/EVALUATION_NAME_{EVALUATION_REWARD};      will be used only if TRAIN = 0
-EVALUATION_REWARD = 4034#1653569#1653569#2928465 #-113009#131311#24559
+EVALUATION_REWARD = 7853#1653569#1653569#2928465 #-113009#131311#24559
 
 # "best" or "checkpoint";      will be used only if TRAIN = 0
-EVALUATION_NAME = "checkpoint"
+EVALUATION_NAME = "best"
 
 # "Racing"
 TRACK_NAME = simstar.Environments.Racing
@@ -134,7 +134,7 @@ def train():
     if MODEL == 'PPO':
         agent = ModelPPO(env, hyprm, insize, outsize)
     else:
-        agent = Model(env, hyprm, insize, outsize)
+        agent = Model(env, hyprm, insize, 6)
         
     if TRAIN:
         writer = SummaryWriter(comment="_model")
@@ -161,12 +161,15 @@ def train():
         for step in range(hyprm.maxlength):
 
             if MODEL == 'PPO':
-                action, log_prob, value = agent.select_action(state=state)
+                action, action_index, log_prob, value = agent.select_action(state=state)
                 action = np.array(action)
             else:
                 action = np.array(agent.select_action(state=state))
                 
+            print('action:', action)
             obs, reward, done, summary = env.step(action)
+            
+            
 
             next_state = np.hstack(
                 (
@@ -187,9 +190,9 @@ def train():
 
             if TRAIN:
                 if MODEL == 'PPO':
-                    agent.memory.push(state, action, reward, next_state, log_prob, value, done)
+                    agent.memory.push(state, action_index, reward, next_state, log_prob, value, done)
                     if len(agent.memory) >= hyprm.rollout_len:
-                        _,_,next_value = agent.select_action(state=state)
+                        _,_,_,next_value = agent.select_action(state=state)
                         advantages, returns = agent.calculate_returns(agent.memory.memories, hyprm.rollout_len, next_value.detach())
                         agent.update(agent.memory.sample(hyprm.n_epochs, hyprm.batchsize, advantages, returns))
                         agent.memory.clean()

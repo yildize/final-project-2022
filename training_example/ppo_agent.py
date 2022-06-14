@@ -4,6 +4,19 @@ import itertools
 from network_ppo import DenseNet
 from utils import Memory_PPO
 from torch.autograd import Variable
+import enum
+
+
+action_matcher = {
+    0:torch.tensor([[0 ,1]]),
+    1:torch.tensor([[0,-1]]),
+    2:torch.tensor([[-0.1,0]]),
+    3:torch.tensor([[0.1,0]]),
+    4: torch.tensor([[0.3,0.5]]),
+    5: torch.tensor([[-0.3,0.5]])
+}
+
+
 
 
 class Model(torch.nn.Module):
@@ -27,6 +40,13 @@ class Model(torch.nn.Module):
         # make a replay buffer memory ro store experiences
         self.memory = Memory_PPO(params.rollout_len)
 
+
+
+        
+    def reverse_action_discretize(action):
+        possible_actions = [torch.tensor([[0 ,1]]),torch.tensor([[0,-1]]),torch.tensor([[0.3,0.5]]),
+                    torch.tensor([[-0.3,0.5]]),torch.tensor([[0.1,0]]),torch.tensor([[-0.1,0]])]
+        
         
     def select_action(self, state):
         
@@ -34,19 +54,21 @@ class Model(torch.nn.Module):
         dists, value = self.network(state) # value [1,1]
 
         #Calculate actions and their corresponding log_probs:
-        actions = dists.sample() #[1,2]
-        actions = torch.clamp(actions, min=-1, max=1) #[1,2]
-        log_prob = dists.log_prob(actions).sum(1).unsqueeze(0) #[1,1]
+        action_index = dists.sample() 
+        action = action_matcher[action_index.item()]
+
+        log_prob = dists.log_prob(action_index).unsqueeze(0) #[1,1]        
         
-        return actions.detach().cpu().numpy()[0], log_prob,  value
+        return action.detach().cpu().numpy()[0], action_index, log_prob,  value
         
         
     def forward_given_actions(self, state: torch.Tensor, action: torch.Tensor):
 
         dists, values = self.network(state)
-
-        log_probs = dists.log_prob(action).sum(1).unsqueeze(1) #[n_envs,1]
-        entropies = dists.entropy().sum(1).unsqueeze(1) #[n_envs,1]
+        
+        #Calculate actions and their corresponding log_probs:
+        log_probs = dists.log_prob(action).unsqueeze(0) 
+        entropies = dists.entropy().unsqueeze(0) 
 
         return log_probs, values, entropies
     
@@ -108,7 +130,7 @@ class Model(torch.nn.Module):
                 new_log_probs, values, entropies = self.forward_given_actions(states,actions)
                 #[bs,1], [bs,1], [bs,1]  with gradients True
                 #advantages = returns - values.detach() 
-                
+    
                 #advantages = (advantages - advantages.mean()) / max(advantages.std(), 1e-5)
                 #returns = (returns - returns.mean()) / max(returns.std(), 1e-5)
 

@@ -1,34 +1,35 @@
 import numpy as np
 import torch
-from torch.distributions import Normal, MultivariateNormal
+from torch.distributions import Normal, MultivariateNormal, Categorical
+
+
+def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
+    torch.nn.init.orthogonal_(layer.weight, std)
+    torch.nn.init.constant_(layer.bias, bias_const)
+    return layer
 
 class DenseNet(torch.nn.Module):
+
     
     def __init__(self, in_size: int, out_size: int, hidden: int = 128):
         super().__init__()
-        self.base = torch.nn.Sequential(
-            torch.nn.Linear(in_size, hidden),
-            torch.nn.ReLU()
-        )
-
-        self.mu = torch.nn.Sequential(
-            torch.nn.Linear(hidden, out_size),
-            torch.nn.Tanh()
-        )
-
-        self.std = torch.nn.Sequential(
-            torch.nn.Linear(hidden, out_size),
-            torch.nn.Softplus()
-        )
-
-        self.value = torch.nn.Linear(hidden,1)
-
-    def forward(self, state: torch.Tensor):
-        x = self.base(state)
-        mu = self.mu(x)
-        std = torch.clamp(self.std(x),0,3)
-        dist = Normal(mu, std)
-        #cov_mat = torch.diag_embed(std)
-        #dist = MultivariateNormal(mu, cov_mat)
+        out_size = 6
         
-        return dist, self.value(x)
+        self.critic = torch.nn.Sequential(
+            layer_init(torch.nn.Linear(in_size, 64)),
+            torch.nn.Tanh(),
+            layer_init(torch.nn.Linear(64, 64)),
+            torch.nn.Tanh(),
+            layer_init(torch.nn.Linear(64, 1), std=1.0),
+        )
+            
+        self.actor = torch.nn.Sequential(
+            layer_init(torch.nn.Linear(in_size, 64)),
+            torch.nn.Tanh(),
+            layer_init(torch.nn.Linear(64, 64)),
+            torch.nn.Tanh(),
+            layer_init(torch.nn.Linear(64, out_size), std=0.01),
+        )
+
+    def forward(self, state: torch.Tensor):        
+        return Categorical(logits=self.actor(state)), self.critic(state)

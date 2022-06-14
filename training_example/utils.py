@@ -44,7 +44,7 @@ class Memory_PPO:
     # append experience to the replay memory
     def push(self, state, action, reward, next_state, log_prob, value, done):
         self.memories.states.append(torch.FloatTensor(state).unsqueeze(0)) #state, next state numpy array of (41,)
-        self.memories.actions.append(torch.FloatTensor(action).unsqueeze(0)) #action numpy array of (2,)
+        self.memories.actions.append(torch.tensor(action).unsqueeze(0)) #action numpy array of (2,)
         self.memories.rewards.append(torch.tensor([[reward]])) #reward int
         self.memories.log_probs.append(log_prob) #log prob tensor of size [1,1]
         self.memories.dones.append(torch.tensor([[1-done*1]])) #done boolean
@@ -63,6 +63,8 @@ class Memory_PPO:
         
         advantages = torch.cat(advantages, dim=0) #[rollout_len, 1]
         returns = torch.cat(returns, dim=0) #[rollout_len, 1]    
+        
+        advantages = (advantages - advantages.mean()) / (advantages.std()+1e-8)
         
         #Yield batches for n_epochs
         for _ in range(n_epochs):
